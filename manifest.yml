@@ -1,0 +1,11 @@
+applications:
+  - name: product_search_rag_YOUR_NUMBER-python-srv
+    memory: 512MB
+    disk_quota: 2G
+    instances: 1
+    buildpacks:
+      - python_buildpack
+    env:
+      FLASK_ENV: production
+    services:
+      - product_search_rag_YOUR_NUMBER-uaa

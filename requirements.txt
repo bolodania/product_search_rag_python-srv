@@ -1,0 +1,6 @@
+Flask
+hdbcli
+generative-ai-hub-sdk[all]
+gunicorn
+cfenv
+sap-xssec
