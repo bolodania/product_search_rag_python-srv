@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SERVICE_NAME="product_search_rag_YOUR_NUMBER-uaa"
+SERVICE_NAME="product_search_rag_YOUR_NUMBER-python-srv-uaa"
 SERVICE_KEY_NAME="uaa-service-key"  # Name of the service key
 
 # Create the service if it doesn't exist

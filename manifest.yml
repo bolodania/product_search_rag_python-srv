@@ -9,4 +9,4 @@ applications:
     env:
       FLASK_ENV: production
     services:
-      - product_search_rag_YOUR_NUMBER-uaa
+      - product_search_rag_YOUR_NUMBER-python-srv-uaa
