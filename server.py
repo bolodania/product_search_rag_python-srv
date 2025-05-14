@@ -1,4 +1,4 @@
-# this is a sample code for a Flask application that uses the SAP AI Core and AI Foundation services to process queries with or without retrieval-augmented generation (RAG) capabilities.
+# this is a Flask application that uses the SAP AI Core and AI Foundation services to process queries with or without retrieval-augmented generation (RAG) capabilities.
 
 import os
 import json

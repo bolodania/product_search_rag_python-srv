@@ -1,5 +1,6 @@
 applications:
   - name: product_search_rag_YOUR_NUMBER-python-srv
+    random-route: true
     memory: 512MB
     disk_quota: 2G
     instances: 1

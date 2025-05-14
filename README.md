@@ -26,7 +26,7 @@ This is the Python-based service for the Product Search RAG application. It inte
 2. **Run Locally**:
 Use the following command to start the Flask server locally:
 
-``` bash
+```bash
 python3 server.py
 ```
 
@@ -37,9 +37,13 @@ The service will be accessible at `http://localhost:3000`.
 1. **Deploy to Cloud Foundry**:
 Run the deployment script:
 
-``` bash
+```bash
 bash deploy.sh
 ```
+
+The `deploy.sh` script will:
+- Create the required SAP XSUAA service and service key.
+- Deploy the Flask application to Cloud Foundry.
 
 2. **Manifest Configuration**:
 Ensure the `manifest.yml` file is correctly configured with your application name and bound services.
@@ -51,7 +55,7 @@ Processes user queries and returns AI-generated responses.
 
 #### Request Body:
 The request body should be in the following format:
-``` json
+```json
 {
     "query": "Your question here",
     "prompt": "System prompt",
@@ -63,7 +67,7 @@ The request body should be in the following format:
 
 #### Response:
 The response will be in the following format:
-``` json
+```json
 {
     "result": "AI-generated response",
     "error": "Error message (if any)"
