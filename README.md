@@ -72,11 +72,18 @@ The response will be in the following format:
 
 ## Key Files
 
-- `server.py`: Main Flask application.
-- `server_structured_response.py`: Handles structured responses using Pydantic models.
-- `deploy.sh`: Deployment script for Cloud Foundry.
-- `manifest.yml`: Cloud Foundry application manifest.
-- `requirements.txt`: Python dependencies.
+- `server.py`: Main Flask application that handles RAG and non-RAG workflows.
+- `server_structured_response.py`: Handles structured responses using Pydantic models for detailed product data.
+- `deploy.sh`: Deployment script for Cloud Foundry, including service creation and application deployment.
+- `manifest.yml`: Cloud Foundry application manifest, specifying app configuration and bound services.
+- `requirements.txt`: Python dependencies required for the project.
+- `runtime.txt`: Specifies the Python runtime version for the application.
+- `Procfile`: Specifies the command to run the Flask application in the cloud environment.
+- `env_cloud.json`: Contains SAP HANA Cloud connection details (user, password, URL, and port).
+- `env_config.json`: Contains AI Core configuration details (authentication URL, client ID, client secret, base URL, and resource group).
+- `xs-security.json`: Defines the security configuration for the application, including the app name and tenant mode.
+- `.gitignore`: Specifies files and directories to be ignored by Git, such as compiled files, virtual environments, and logs.
+- `README.md`: Documentation for the project, including setup, deployment, and file descriptions.
 
 ## Security
 
