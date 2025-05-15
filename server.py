@@ -159,7 +159,7 @@ atexit.register(close_db_connection)
 port = int(os.environ.get('PORT', 3000))
 if not local_testing:
     # If not in local testing mode, get the UAA service credentials
-    uaa_service = env.get_service(name='product_search_rag_YOUR_NUMBER-uaa').credentials
+    uaa_service = env.get_service(name='product_search_rag_YOUR_NUMBER-python-srv-uaa').credentials
 
 # Authorization Decorator
 def require_auth(f):
