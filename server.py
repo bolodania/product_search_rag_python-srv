@@ -20,11 +20,11 @@ from langchain.schema import HumanMessage
 local_testing = False
 
 # Load HANA Cloud connection details
-with open(os.path.join(os.getcwd(), '..', 'env_cloud.json')) as f:
+with open(os.path.join(os.getcwd(), 'env_cloud.json')) as f:
     hana_env_c = json.load(f)
 
 # Load AI Core configuration
-with open(os.path.join(os.getcwd(), '..', 'env_config.json')) as f:
+with open(os.path.join(os.getcwd(), 'env_config.json')) as f:
     aicore_config = json.load(f)
 
 # Initialize the AI Core client
