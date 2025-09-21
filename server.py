@@ -20,11 +20,11 @@ from langchain.schema import HumanMessage
 local_testing = False
 
 # Load HANA Cloud connection details
-with open(os.path.join(os.getcwd(), 'env_cloud.json')) as f:
+with open(os.path.join(os.getcwd(), '..', 'env_cloud.json')) as f:
     hana_env_c = json.load(f)
 
 # Load AI Core configuration
-with open(os.path.join(os.getcwd(), 'env_config.json')) as f:
+with open(os.path.join(os.getcwd(), '..', 'env_config.json')) as f:
     aicore_config = json.load(f)
 
 # Initialize the AI Core client
@@ -37,7 +37,7 @@ ai_core_client = AICoreV2Client(base_url=aicore_config['AICORE_BASE_URL'],
 # Initialize the GenAIHub proxy client        
 proxy_client = GenAIHubProxyClient(ai_core_client = ai_core_client)
 # Init the OpenAI embedding model
-embedding_model = OpenAIEmbeddings(proxy_model_name='text-embedding-ada-002', proxy_client=proxy_client)
+embedding_model = OpenAIEmbeddings(proxy_model_name='text-embedding-3-large', proxy_client=proxy_client)
 
 # Establish a connection to the HANA Cloud database
 conn_db_api = dbapi.connect( 

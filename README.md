@@ -59,7 +59,7 @@ The request body should be in the following format:
 {
     "query": "Your question here",
     "prompt": "System prompt",
-    "chatModelName": "gpt-4o",
+    "chatModelName": "gpt-5",
     "topK": 15,
     "withRAG": true
 }

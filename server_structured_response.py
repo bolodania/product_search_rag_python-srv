@@ -35,9 +35,9 @@ ai_core_client = AICoreV2Client(base_url=aicore_config['AICORE_BASE_URL'],
 # Initialize the GenAIHub proxy client        
 proxy_client = GenAIHubProxyClient(ai_core_client = ai_core_client)
 # Init the OpenAI embedding model
-embedding_model = OpenAIEmbeddings(proxy_model_name='text-embedding-ada-002', proxy_client=proxy_client)
+embedding_model = OpenAIEmbeddings(proxy_model_name='text-embedding-3-large', proxy_client=proxy_client)
 # Set up the ChatOpenAI model
-llm = ChatOpenAI(proxy_model_name='gpt-4o', proxy_client=proxy_client)
+llm = ChatOpenAI(proxy_model_name='gpt-5', proxy_client=proxy_client)
 
 # Establish a connection to the HANA Cloud database
 conn_db_api = dbapi.connect( 
