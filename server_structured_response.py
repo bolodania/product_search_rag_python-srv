@@ -6,13 +6,12 @@ from hdbcli import dbapi
 from cfenv import AppEnv
 from sap import xssec
 import functools
-from gen_ai_hub.proxy.langchain.openai import OpenAIEmbeddings, ChatOpenAI
 from gen_ai_hub.proxy.gen_ai_hub_proxy import GenAIHubProxyClient
 from ai_core_sdk.ai_core_v2_client import AICoreV2Client
 from langchain.prompts import PromptTemplate
 from langchain_hana import HanaDB
-from langchain.schema import HumanMessage
 from pydantic import BaseModel, Field
+from gen_ai_hub.proxy.langchain.init_models import init_llm, init_embedding_model
 
 #define the local testing variable (True to skip authorization)   
 local_testing = False
@@ -35,26 +34,35 @@ ai_core_client = AICoreV2Client(base_url=aicore_config['AICORE_BASE_URL'],
 # Initialize the GenAIHub proxy client        
 proxy_client = GenAIHubProxyClient(ai_core_client = ai_core_client)
 # Init the OpenAI embedding model
-embedding_model = OpenAIEmbeddings(proxy_model_name='text-embedding-3-large', proxy_client=proxy_client)
-# Set up the ChatOpenAI model
-llm = ChatOpenAI(proxy_model_name='gpt-5', proxy_client=proxy_client)
+embedding_model = init_embedding_model('text-embedding-3-large', proxy_client=proxy_client)
+# Set up the Chat LLM model
+llm = init_llm('gpt-5', proxy_client=proxy_client, max_tokens=30000)
 
-# Establish a connection to the HANA Cloud database
-conn_db_api = dbapi.connect( 
-    address=hana_env_c['url'],
-    port=hana_env_c['port'], 
-    user=hana_env_c['user'], 
-    password=hana_env_c['pwd']   
-)
+# Define the schema as a Pydantic model
+class ProductData(BaseModel):
+    category: str = Field(description="The category of the product")
+    currency: str = Field(description="The currency")
+    description: str = Field(description="The description of the product")
+    leadTimeDays: int = Field(description="The lead time (in days)")
+    manufacturer: str = Field(description="The manufacturer of the product")
+    minOrder: int = Field(description="Minimal order amount for the product")
+    productId: str = Field(description="The ID of the product")
+    productName: str = Field(description="The name of the product")
+    rating: int = Field(description="The rating of the product")
+    status: str = Field(description="The status of the product")
+    stockQuantity: int = Field(description="The stock quantity of the product")
+    supplierAddress: str = Field(description="The address of the supplier")
+    supplierCity: str = Field(description="The city where the supplier is located")
+    supplierCountry: str = Field(description="The country where the supplier is located")
+    supplierId: str = Field(description="The ID of the supplier")
+    supplierName: str = Field(description="The name of the supplier")
+    unitPrice: float = Field(description="The unit price of the product")
 
-# Create a LangChain VectorStore interface for the HANA database and specify the table (collection) to use for accessing the vector embeddings
-db_ada_table = HanaDB(
-    embedding=embedding_model, 
-    connection=conn_db_api, 
-    table_name="PRODUCTS_IT_ACCESSORY_OPENAI_"+ hana_env_c['user'],
-    content_column="VEC_TEXT", # the original text description of the product details
-    metadata_column="VEC_META", # metadata associated with the product details
-    vector_column="VEC_VECTOR" # the vector representation of each product 
+# --- Enable structured output on this LLM ---
+llm_structured = llm.with_structured_output(
+    method="json_schema",   # JSON Schema validation mode
+    schema=ProductData,     # Pydantic model
+    strict=True             # Strict schema validation
 )
 # Create a Flask application
 app = Flask(__name__)
@@ -63,79 +71,57 @@ app = Flask(__name__)
 env = AppEnv()
 
 # This function is called when the /retrieveData endpoint is hit
-#The function takes the incoming data as input and returns the result as output
-
-def process_data(data):
+#The function takes the incoming data as input and returns the structured LLM output
+def process_data(data, conn_db_api):
     try:
-        inc_prompt = data["prompt"]
-
-        prompt_template = f"{inc_prompt}" + """
-
-            {context}
-
-            question: {question}
-
-            """
-
-        PROMPT = PromptTemplate(template = prompt_template, 
-                        input_variables=["context", "question"]
-                       )
-
+        # Create a LangChain VectorStore interface for the HANA database and specify the table (collection) to use for accessing the vector embeddings
+        db_openai_table = HanaDB(
+            embedding=embedding_model, 
+            connection=conn_db_api, 
+            table_name="PRODUCTS_IT_ACCESSORY_OPENAI_"+ hana_env_c['user'],
+            content_column="VEC_TEXT", # the original text description of the product details
+            metadata_column="VEC_META", # metadata associated with the product details
+            vector_column="VEC_VECTOR" # the vector representation of each product 
+        )
         question = data["query"]
-        retriever = db_ada_table.as_retriever(search_kwargs={'k':25})
-        retrieved_docs = retriever.invoke(question)
 
-        # Combine retrieved docs into a single context string
-        context = "\n".join([doc.page_content for doc in retrieved_docs])
+        retriever = db_openai_table.as_retriever(search_kwargs={'k':25})
+        docs = retriever.invoke(question)
 
-        # Define the schema as a Pydantic model
-        class ProductData(BaseModel):
-            productId: str = Field(description="The ID of the product")
-            productName: str = Field(description="The name of the product")
-            category: str = Field(description="The category of the product")
-            description: str = Field(description="The description of the product")
-            unitPrice: float = Field(description="The unit price of the product")
-            currency: str = Field(description="The currency")
-            supplierId: str = Field(description="The ID of the supplier")
-            supplierName: str = Field(description="The name of the supplier")
-            supplierCountry: str = Field(description="The country where the supplier is located")
-            supplierCity: str = Field(description="The city where the supplier is located")
-            supplierAddress: str = Field(description="The address of the supplier")
-            leadTimeDays: int = Field(description="The lead time (in days)")
-            minOrder: int = Field(description="Minimal order amount for the product")
-            rating: int = Field(description="The rating of the product")
-            status: str = Field(description="The status of the product")
+        # Combine retrieved text manually
+        context = "\n\n".join([doc.page_content for doc in docs])
 
-        # Get the function definition
-        function_def = {
-            "name": "get_product_data",
-            "description": "Retrieve product information",
-            "parameters": ProductData.schema()  # Converts Pydantic model to OpenAI function format
-        }
+        # Ask structured model to extract ProductData
+        PRODUCT_PROMPT = PromptTemplate.from_template("""
+        You are a product data extraction assistant.
+        Use the context below to find detailed product information and fill in the fields of the provided schema.
+        Return only information that can be directly inferred from the context.
+        If a field is missing, use a reasonable default (empty string, 0, or 0.0).
 
-        answer = llm.invoke(
-            [HumanMessage(content=PROMPT.format(context=context, question=question))],
-            functions=[function_def],  # Pass JSON schema
-            function_call={"name": "get_product_data"}  # Let the model decide when to use the function
+        Context:
+        {context}
+
+        Question:
+        {question}
+        """)
+
+        prompt_text = PRODUCT_PROMPT.format(
+            context=context,
+            question=question
         )
 
-        # Parse the structured output
-        parsed_output = ProductData.parse_raw(answer.additional_kwargs["function_call"]["arguments"])
+        print("Prompt Text:", prompt_text)
+        
+        # Use the structured LLM directly here
+        response = llm_structured.invoke(prompt_text)
 
-        return json.dumps(parsed_output.dict())
+        print("Structured Response:", response)
+
+        return response.model_dump_json()
         
     except Exception as e:
         return json.dumps({"error": str(e)})
 
-
-def close_db_connection():
-    if conn_db_api:
-        conn_db_api.close()
-        print("DB connection closed")
-
-atexit.register(close_db_connection)
-
-port = int(os.environ.get('PORT', 3000))
 if not local_testing:
     uaa_service = env.get_service(name='product_search_rag-python-srv-uaa').credentials
 
@@ -162,24 +148,30 @@ def require_auth(f):
 @require_auth
 def process_request():
     try:
+        # Establish a connection to the HANA Cloud database
+        conn_db_api = dbapi.connect( 
+            address=hana_env_c['url'],
+            port=hana_env_c['port'], 
+            user=hana_env_c['user'], 
+            password=hana_env_c['pwd']   
+        )
         data = request.get_json()
-        required_fields = ["query", "prompt"]
+        required_fields = ["query"]
         if not data or any(field not in data for field in required_fields):
             return jsonify({"error": "Invalid JSON input"}), 400
         
-        result = process_data(data)
+        result = process_data(data, conn_db_api)
         if len(result) < 1:
             return jsonify({"error": "no suggestions could be retrieved"}), 400
         else:
-            response = app.response_class(
-                response=result,
-                status=200,
-                mimetype='application/json'
-            )
-            return response
+            return result, 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        # Always close connection after request
+        if conn_db_api:
+            conn_db_api.close()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
 
