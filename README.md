@@ -1,3 +1,4 @@
+
 # product_search_rag_YOUR_NUMBER-python-srv
 
 This is the Python-based service for the Product Search RAG application. It integrates with SAP HANA Cloud and Generative AI models to provide retrieval-augmented generation (RAG) capabilities.
@@ -17,82 +18,105 @@ This is the Python-based service for the Product Search RAG application. It inte
 - Cloud Foundry CLI
 - Required Python dependencies (see `requirements.txt`)
 
+
 ## Environment Configuration
 
-1. **Set Up Environment Variables**:
-   - Update the `env_cloud.json` file with your SAP HANA Cloud credentials.
-   - Update the `env_config.json` file with your AI Core configuration, including API keys and endpoints.
+### 1. HANA Cloud Credentials
+- In Cloud Foundry: Provide HANA credentials as a User-Provided Service (UPS). The service name must match the value of `HANA_UPS_NAME` (default: `ups_RMILLERYOUR_NUMBER`).
+- Locally: Create an `env_cloud.json` file with your HANA credentials (host, port, user, password, schema).
 
-2. **Run Locally**:
-Use the following command to start the Flask server locally:
+### 2. AI Core Configuration
+- In Cloud Foundry: Bind the managed AI Core service (default: `default_aicore`).
+- Locally: Create an `env_config.json` file with your AI Core configuration (API URLs, client ID, client secret, resource group).
+
+### 3. XSUAA Authentication
+- The deployment script (`deploy.sh`) will create the required XSUAA service (`product_search_rag-python-srv-uaa`) and service key if not present.
+
+### 4. Environment Variables
+- Most configuration is handled via environment variables set in `manifest.yml` (model names, top_k, max_tokens, temperature, service names).
+
+## Running Locally
+
+Start the Flask server with:
 
 ```bash
 python3 server.py
 ```
 
-The service will be accessible at `http://localhost:3000`.
+The service will be accessible at [http://localhost:3000](http://localhost:3000).
 
 ## Deployment
 
-1. **Deploy to Cloud Foundry**:
-Run the deployment script:
 
-```bash
-bash deploy.sh
-```
+## Deployment
 
-The `deploy.sh` script will:
-- Create the required SAP XSUAA service and service key.
-- Deploy the Flask application to Cloud Foundry.
+1. **Deploy to Cloud Foundry**
+    - Run the deployment script:
 
-2. **Manifest Configuration**:
-Ensure the `manifest.yml` file is correctly configured with your application name and bound services.
+    ```bash
+    bash deploy.sh
+    ```
+
+    The script will:
+    - Ensure the XSUAA service and service key exist (creates if missing)
+    - Remind you to create and bind the HANA UPS if not already present
+    - Deploy the Flask application using `cf push` with the configuration in `manifest.yml`
+
+2. **Manifest Configuration**
+    - Edit `manifest.yml` to set your application name and ensure the correct service bindings:
+      - XSUAA service (authentication)
+      - AI Core service
+      - HANA UPS (user-provided service)
 
 ## Endpoints
 
-### `/retrieveData` (POST)
-Processes user queries and returns AI-generated responses.
 
-#### Request Body:
-The request body should be in the following format:
+### `/retrieveData` (POST)
+Processes user queries and returns AI-generated responses using RAG (Retrieval-Augmented Generation).
+
+#### Request Body
+The request body must include:
+
 ```json
 {
-    "query": "Your question here",
-    "prompt": "System prompt",
-    "chatModelName": "gpt-5",
-    "topK": 15,
-    "withRAG": true
+    "query": "Your question here"
 }
 ```
 
-#### Response:
-The response will be in the following format:
+#### Response
+On success:
 ```json
 {
-    "result": "AI-generated response",
-    "error": "Error message (if any)"
+    "result": "AI-generated response"
+}
+```
+On error:
+```json
+{
+    "error": "Error message"
 }
 ```
 
 ## Key Files
 
-- `server.py`: Main Flask application that handles RAG and non-RAG workflows.
-- `server_structured_response.py`: Handles structured responses using Pydantic models for detailed product data.
-- `deploy.sh`: Deployment script for Cloud Foundry, including service creation and application deployment.
-- `manifest.yml`: Cloud Foundry application manifest, specifying app configuration and bound services.
-- `requirements.txt`: Python dependencies required for the project.
-- `runtime.txt`: Specifies the Python runtime version for the application.
-- `Procfile`: Specifies the command to run the Flask application in the cloud environment.
-- `env_cloud.json`: Contains SAP HANA Cloud connection details (user, password, URL, and port).
-- `env_config.json`: Contains AI Core configuration details (authentication URL, client ID, client secret, base URL, and resource group).
-- `xs-security.json`: Defines the security configuration for the application, including the app name and tenant mode.
-- `.gitignore`: Specifies files and directories to be ignored by Git, such as compiled files, virtual environments, and logs.
-- `README.md`: Documentation for the project, including setup, deployment, and file descriptions.
+
+- `server.py`: Main Flask application for RAG workflow (vector search + LLM response).
+- `deploy.sh`: Automated deployment script for Cloud Foundry, including XSUAA service creation and app deployment.
+- `manifest.yml`: Cloud Foundry manifest specifying app name, environment variables, and service bindings.
+- `requirements.txt`: Python dependencies for the project.
+- `runtime.txt`: Python runtime version for deployment.
+- `Procfile`: Command to run the Flask app in the cloud.
+- `env_cloud.json`: (Local only) HANA Cloud credentials.
+- `env_config.json`: (Local only) AI Core configuration.
+- `xs-security.json`: Security configuration for XSUAA.
+- `.gitignore`: Files and directories to ignore in Git.
+- `README.md`: Project documentation.
+
 
 ## Security
 
-- Authentication is managed via SAP XSUAA.
-- Ensure sensitive credentials are stored securely in `env_cloud.json` and `env_config.json`.
+- Authentication is enforced via SAP XSUAA in Cloud Foundry deployments. Local testing does not require authentication.
+- Sensitive credentials should be stored securely in `env_cloud.json` and `env_config.json` (local only). Never commit these files to version control.
 
 ## License
 
