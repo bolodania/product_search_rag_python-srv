@@ -6,7 +6,18 @@ applications:
     instances: 1
     buildpacks:
       - python_buildpack
+
     env:
       FLASK_ENV: production
+
+      # Optional runtime tuning (recommended)
+      CHAT_MODEL_NAME: anthropic--claude-4.5-sonnet
+      EMBEDDING_MODEL_NAME: text-embedding-3-large
+      TOP_K: 15
+      MAX_TOKENS: 800
+      TEMPERATURE: 0.3
+
     services:
       - product_search_rag-python-srv-uaa
+      - default_aicore
+      - ups_RMILLER_YOUR_NUMBER

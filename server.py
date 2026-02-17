@@ -26,19 +26,92 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 # Local testing flag
 # ==========================================================
-local_testing = True
+local_testing = not bool(os.getenv("VCAP_SERVICES"))
 
 # ==========================================================
-# Load Config
+# Configuration Loader (VCAP/UVPs or Local JSON fallback)
 # ==========================================================
+env = AppEnv()
 
-with open("env_cloud.json") as f:
-    hana_env = json.load(f)
 
-with open("env_config.json") as f:
-    aicore_cfg = json.load(f)
+# ------------------------------
+# HANA configuration (UPVs)
+# ------------------------------
+def load_hana_config():
+    """
+    Load HANA credentials from environment variables (UPVs) for CF deployment,
+    or fall back to local env_cloud.json for local development.
+    """
+    # 1. Check if required env vars exist
+    required_vars = ["HANA_HOST", "HANA_USER", "HANA_PASSWORD"]
+    if all(os.getenv(v) for v in required_vars):
+        logger.info("Using HANA credentials from environment variables (UPVs)")
+        return {
+            "url": os.getenv("HANA_HOST"),
+            "port": int(os.getenv("HANA_PORT", "443")),
+            "user": os.getenv("HANA_USER"),
+            "pwd": os.getenv("HANA_PASSWORD"),
+            "schema": os.getenv("HANA_SCHEMA"),  # optional
+        }
 
-VECTOR_TABLE = f"PRODUCTS_IT_ACCESSORY_OPENAI_{hana_env['user']}"
+    # 2. Fallback to local JSON
+    if os.path.exists("env_cloud.json"):
+        logger.info("Using local HANA config from env_cloud.json")
+        with open("env_cloud.json") as f:
+            return json.load(f)
+
+    # 3. No credentials found → fail fast
+    raise RuntimeError(
+        "No HANA credentials found. "
+        "Set HANA_HOST, HANA_USER, HANA_PASSWORD (and optionally HANA_SCHEMA) "
+        "or provide env_cloud.json locally."
+    )
+
+
+# Load config
+hana_env = load_hana_config()
+
+
+def get_service_credentials(label=None, name=None):
+    """
+    Returns credentials from CF service binding.
+    Supports lookup by label or service name.
+    """
+    try:
+        if name:
+            return env.get_service(name=name).credentials
+        if label:
+            services = env.get_services(label=label)
+            if services:
+                return list(services.values())[0].credentials
+    except Exception:
+        pass
+    return None
+
+
+# ------------------------------
+# AI Core configuration
+# ------------------------------
+aicore_creds = get_service_credentials(label="aicore")
+
+if aicore_creds:
+    logger.info("Using AI Core credentials from VCAP_SERVICES")
+
+    aicore_cfg = {
+        "AICORE_BASE_URL": aicore_creds.get("base_url")
+        or aicore_creds.get("serviceurls", {}).get("AI_API_URL"),
+        "AICORE_AUTH_URL": aicore_creds.get("url")
+        or aicore_creds.get("uaa", {}).get("url"),
+        "AICORE_CLIENT_ID": aicore_creds.get("clientid"),
+        "AICORE_CLIENT_SECRET": aicore_creds.get("clientsecret"),
+        "AICORE_RESOURCE_GROUP": aicore_creds.get("resource_group"),
+    }
+
+else:
+    logger.info("Using local AI Core config (env_config.json)")
+    with open("env_config.json") as f:
+        aicore_cfg = json.load(f)
+
 
 # ==========================================================
 # Initialize SAP AI Core + GenAI Hub
@@ -54,19 +127,27 @@ ai_core_client = AICoreV2Client(
 
 proxy_client = GenAIHubProxyClient(ai_core_client=ai_core_client)
 
-TOP_K = 15
-EMBEDDING_MODEL_NAME = "text-embedding-3-large"
+VECTOR_TABLE = f"PRODUCTS_IT_ACCESSORY_OPENAI_{hana_env['user']}"
+TOP_K = int(os.getenv("TOP_K", 15))
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-3-large")
 embedding_model = init_embedding_model(EMBEDDING_MODEL_NAME, proxy_client=proxy_client)
 
-CHAT_MODEL_NAME = 'gpt-4.1'
-MAX_TOKENS = 800
-TEMPERATURE = 0.3
-llm = init_llm(CHAT_MODEL_NAME, proxy_client=proxy_client, max_tokens=MAX_TOKENS, temperature=TEMPERATURE)
+CHAT_MODEL_NAME = os.getenv("CHAT_MODEL_NAME", "anthropic--claude-4.5-sonnet")
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", 800))
+TEMPERATURE = float(os.getenv("TEMPERATURE", 0.3))
+
+llm = init_llm(
+    CHAT_MODEL_NAME,
+    proxy_client=proxy_client,
+    max_tokens=MAX_TOKENS,
+    temperature=TEMPERATURE,
+)
 
 # ==========================================================
 # Flask App
 # ==========================================================
 app = Flask(__name__)
+
 
 # ==========================================================
 # Helper — Build Vector Store
@@ -80,6 +161,7 @@ def get_vector_store(conn):
         metadata_column="VEC_META",
         vector_column="VEC_VECTOR",
     )
+
 
 # ==========================================================
 # Helper — Generate RAG answer
@@ -175,6 +257,7 @@ def generate_rag_response(query: str, hana_conn) -> str:
 
     return response.strip()
 
+
 # ==========================================================
 # Helper — Main processing logic
 # ==========================================================
@@ -197,9 +280,10 @@ def process_query(data: Dict[str, Any], hana_conn):
 # ==========================================================
 # AUTH
 # ==========================================================
+uaa_service = None
+
 if not local_testing:
-    env = AppEnv()
-    uaa_service = env.get_service(name="product_search_rag-python-srv-uaa").credentials
+    uaa_service = get_service_credentials(label="xsuaa")
 
 
 def require_auth(f):
@@ -219,6 +303,7 @@ def require_auth(f):
         return f(*args, **kwargs)
 
     return decorated
+
 
 # ==========================================================
 # REST Endpoint
@@ -260,6 +345,7 @@ def retrieve_data():
                 hana_conn.close()
             except:
                 pass
+
 
 # ==========================================================
 if __name__ == "__main__":
