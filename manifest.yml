@@ -9,13 +9,15 @@ applications:
 
     env:
       FLASK_ENV: production
-
-      # Optional runtime tuning (recommended)
       CHAT_MODEL_NAME: anthropic--claude-4.5-sonnet
       EMBEDDING_MODEL_NAME: text-embedding-3-large
       TOP_K: 15
       MAX_TOKENS: 800
       TEMPERATURE: 0.3
+      HANA_UPS_NAME: ups_RMILLER01
+      AI_CORE_INSTANCE_NAME: default_aicore
+      AI_CORE_RESOURCE_GROUP: default
+      XSUAA_SERVICE_NAME: product_search_rag-python-srv-uaa
 
     services:
       - product_search_rag-python-srv-uaa

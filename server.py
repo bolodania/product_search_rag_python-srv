@@ -14,7 +14,7 @@ from ai_core_sdk.ai_core_v2_client import AICoreV2Client
 from gen_ai_hub.proxy.langchain.init_models import init_llm, init_embedding_model
 
 from langchain_hana import HanaDB
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 # ==========================================================
@@ -29,88 +29,102 @@ logger = logging.getLogger(__name__)
 local_testing = not bool(os.getenv("VCAP_SERVICES"))
 
 # ==========================================================
-# Configuration Loader (VCAP/UVPs or Local JSON fallback)
+# Configuration Loader (VCAP or Local JSON fallback)
 # ==========================================================
 env = AppEnv()
 
+# ------------------------------
+# HANA configuration (UPS binding or local JSON)
+# ------------------------------
+UPS_HANA_SERVICE_NAME = os.getenv("HANA_UPS_NAME", "ups_RMILLERYOUR_NUMBER")
 
-# ------------------------------
-# HANA configuration (UPVs)
-# ------------------------------
+
 def load_hana_config():
     """
-    Load HANA credentials from environment variables (UPVs) for CF deployment,
-    or fall back to local env_cloud.json for local development.
+    Load HANA credentials from a specific User-Provided Service binding.
+
+    Production (CF):
+        Requires service binding with name UPS_HANA_SERVICE_NAME.
+
+    Local development:
+        Falls back to env_cloud.json if present.
     """
-    # 1. Check if required env vars exist
-    required_vars = ["HANA_HOST", "HANA_USER", "HANA_PASSWORD"]
-    if all(os.getenv(v) for v in required_vars):
-        logger.info("Using HANA credentials from environment variables (UPVs)")
+
+    # --------------------------------------------------
+    # 1. Try Cloud Foundry UPS binding (required in CF)
+    # --------------------------------------------------
+    creds = (
+        env.get_service(name=UPS_HANA_SERVICE_NAME).credentials
+        if env.get_service(name=UPS_HANA_SERVICE_NAME)
+        else None
+    )
+
+    if creds:
+        logger.info(f"Using HANA credentials from UPS: {UPS_HANA_SERVICE_NAME}")
+
         return {
-            "url": os.getenv("HANA_HOST"),
-            "port": int(os.getenv("HANA_PORT", "443")),
-            "user": os.getenv("HANA_USER"),
-            "pwd": os.getenv("HANA_PASSWORD"),
-            "schema": os.getenv("HANA_SCHEMA"),  # optional
+            "url": creds["HANA_HOST"],
+            "port": int(creds.get("HANA_PORT", 443)),
+            "user": creds["HANA_USER"],
+            "pwd": creds["HANA_PASSWORD"],
+            "schema": creds.get("HANA_SCHEMA"),
         }
 
-    # 2. Fallback to local JSON
+    # --------------------------------------------------
+    # 2. Local fallback (development only)
+    # --------------------------------------------------
     if os.path.exists("env_cloud.json"):
-        logger.info("Using local HANA config from env_cloud.json")
+        logger.warning("Using local HANA config from env_cloud.json")
         with open("env_cloud.json") as f:
             return json.load(f)
 
-    # 3. No credentials found → fail fast
+    # --------------------------------------------------
+    # 3. Fail hard if not found
+    # --------------------------------------------------
     raise RuntimeError(
-        "No HANA credentials found. "
-        "Set HANA_HOST, HANA_USER, HANA_PASSWORD (and optionally HANA_SCHEMA) "
-        "or provide env_cloud.json locally."
+        f"HANA UPS service '{UPS_HANA_SERVICE_NAME}' not found.\n"
+        "Ensure the service is created and bound:\n"
+        f"cf bind-service <app> {UPS_HANA_SERVICE_NAME}"
     )
 
 
-# Load config
+# Load config at startup
 hana_env = load_hana_config()
-
-
-def get_service_credentials(label=None, name=None):
-    """
-    Returns credentials from CF service binding.
-    Supports lookup by label or service name.
-    """
-    try:
-        if name:
-            return env.get_service(name=name).credentials
-        if label:
-            services = env.get_services(label=label)
-            if services:
-                return list(services.values())[0].credentials
-    except Exception:
-        pass
-    return None
 
 
 # ------------------------------
 # AI Core configuration
 # ------------------------------
-aicore_creds = get_service_credentials(label="aicore")
+AI_CORE_RESOURCE_GROUP = os.getenv("AI_CORE_RESOURCE_GROUP", "default")
+AI_CORE_INSTANCE_NAME = os.getenv("AI_CORE_INSTANCE_NAME", "default_aicore")
+
+aicore_creds = (
+    env.get_service(name=AI_CORE_INSTANCE_NAME).credentials
+    if env.get_service(name=AI_CORE_INSTANCE_NAME)
+    else None
+)
 
 if aicore_creds:
-    logger.info("Using AI Core credentials from VCAP_SERVICES")
-
+    logger.info(f"Using AI Core credentials from service: {AI_CORE_INSTANCE_NAME}")
     aicore_cfg = {
-        "AICORE_BASE_URL": aicore_creds.get("base_url")
-        or aicore_creds.get("serviceurls", {}).get("AI_API_URL"),
-        "AICORE_AUTH_URL": aicore_creds.get("url")
-        or aicore_creds.get("uaa", {}).get("url"),
-        "AICORE_CLIENT_ID": aicore_creds.get("clientid"),
-        "AICORE_CLIENT_SECRET": aicore_creds.get("clientsecret"),
-        "AICORE_RESOURCE_GROUP": aicore_creds.get("resource_group"),
+        "AICORE_BASE_URL": aicore_creds["serviceurls"]["AI_API_URL"] + "/v2",
+        "AICORE_AUTH_URL": aicore_creds["url"] + "/oauth/token",
+        "AICORE_CLIENT_ID": aicore_creds["clientid"],
+        "AICORE_CLIENT_SECRET": aicore_creds["clientsecret"],
+        "AICORE_RESOURCE_GROUP": AI_CORE_RESOURCE_GROUP,
     }
 
 else:
-    logger.info("Using local AI Core config (env_config.json)")
-    with open("env_config.json") as f:
-        aicore_cfg = json.load(f)
+    logger.warning("AI Core service not found, trying env_config.json")
+
+    try:
+        with open("env_config.json") as f:
+            aicore_cfg = json.load(f)
+    except Exception as e:
+        raise RuntimeError("AI Core config not available from CF or local file") from e
+
+if not aicore_cfg:
+    raise RuntimeError("AI Core config is empty or None")
 
 
 # ==========================================================
@@ -141,6 +155,7 @@ llm = init_llm(
     proxy_client=proxy_client,
     max_tokens=MAX_TOKENS,
     temperature=TEMPERATURE,
+    top_p=None,
 )
 
 # ==========================================================
@@ -174,7 +189,7 @@ def generate_rag_response(query: str, hana_conn) -> str:
 
     context = "\n\n".join(doc.page_content for doc, _ in results)
 
-    SYSTEM_RAG_PROMPT = """
+    PRODUCT_RAG_PROMPT = """
     You are a product recommendation assistant.
 
     Your job is to help users find and understand products using ONLY the information provided in the retrieved context.
@@ -247,15 +262,15 @@ def generate_rag_response(query: str, hana_conn) -> str:
     {context}
     """
 
-    PROMPT = PromptTemplate(
-        template=SYSTEM_RAG_PROMPT, input_variables=["query", "context"]
-    )
+    human_message_prompt = HumanMessagePromptTemplate.from_template(PRODUCT_RAG_PROMPT)
+    chat_prompt = ChatPromptTemplate.from_messages([human_message_prompt])
 
-    chain = PROMPT | llm | StrOutputParser()
+    prompt_text = chat_prompt.format_prompt(query=query, context=context).to_string()
 
-    response = chain.invoke({"query": query, "context": context})
+    llm_response = llm.invoke(prompt_text)
+    # parsed_response = StrOutputParser().parse(llm_response)
 
-    return response.strip()
+    return llm_response.content.strip()
 
 
 # ==========================================================
@@ -280,10 +295,13 @@ def process_query(data: Dict[str, Any], hana_conn):
 # ==========================================================
 # AUTH
 # ==========================================================
-uaa_service = None
-
 if not local_testing:
-    uaa_service = get_service_credentials(label="xsuaa")
+    XSUAA_SERVICE_NAME = os.getenv(
+        "XSUAA_SERVICE_NAME", "product_search_rag-python-srv-uaa"
+    )
+    uaa_service = env.get_service(name=XSUAA_SERVICE_NAME).credentials
+    if not uaa_service:
+        raise RuntimeError("XSUAA service binding not found")
 
 
 def require_auth(f):
