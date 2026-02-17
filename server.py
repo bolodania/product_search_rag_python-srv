@@ -15,7 +15,6 @@ from gen_ai_hub.proxy.langchain.init_models import init_llm, init_embedding_mode
 
 from langchain_hana import HanaDB
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
 # ==========================================================
 # Logging
@@ -268,7 +267,6 @@ def generate_rag_response(query: str, hana_conn) -> str:
     prompt_text = chat_prompt.format_prompt(query=query, context=context).to_string()
 
     llm_response = llm.invoke(prompt_text)
-    # parsed_response = StrOutputParser().parse(llm_response)
 
     return llm_response.content.strip()
 
