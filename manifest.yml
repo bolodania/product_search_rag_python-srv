@@ -14,7 +14,7 @@ applications:
       TOP_K: 15
       MAX_TOKENS: 800
       TEMPERATURE: 0.3
-      HANA_UPS_NAME: ups_RMILLER01
+      HANA_UPS_NAME: ups_RMILLERYOUR_NUMBER
       AI_CORE_INSTANCE_NAME: default_aicore
       AI_CORE_RESOURCE_GROUP: default
       XSUAA_SERVICE_NAME: product_search_rag-python-srv-uaa
@@ -22,4 +22,4 @@ applications:
     services:
       - product_search_rag-python-srv-uaa
       - default_aicore
-      - ups_RMILLER_YOUR_NUMBER
+      - ups_RMILLERYOUR_NUMBER
