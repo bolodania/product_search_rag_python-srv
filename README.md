@@ -11,7 +11,7 @@ This is the Python-based service for the Product Search RAG application. It inte
 - Generative AI Hub SDK for embedding generation and chat completions.
 - Secure authentication using SAP XSUAA.
 - RAG workflow combining vector search results with AI-generated responses.
-- **Product catalog embedding script**: Quickly (re)embeds product catalog data into HANA for semantic search (see `embed_peoduct_catalog.py`).
+- **Product catalog embedding script**: Quickly (re)embeds product catalog data into HANA for semantic search (see `embed_product_catalog.py`).
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ The service will be accessible at [http://localhost:3000](http://localhost:3000)
 If you update the product catalog CSV or want to refresh the vector store, run:
 
 ```bash
-python3 embed_peoduct_catalog.py
+python3 embed_product_catalog.py
 ```
 
 This will:
@@ -117,7 +117,7 @@ On error:
 ## Key Files
 
 - `server.py`: Main Flask application for RAG workflow (vector search + LLM response).
-- `embed_peoduct_catalog.py`: Script to (re)embed the product catalog CSV into HANA with fresh embeddings. Run manually after updating the catalog or to reset the vector store.
+- `embed_product_catalog.py`: Script to (re)embed the product catalog CSV into HANA with fresh embeddings. Run manually after updating the catalog or to reset the vector store.
 - `deploy.sh`: Automated deployment script for Cloud Foundry, including XSUAA service creation and app deployment.
 - `manifest.yml`: Cloud Foundry manifest specifying app name, environment variables, and service bindings.
 - `requirements.txt`: Python dependencies for the project.
