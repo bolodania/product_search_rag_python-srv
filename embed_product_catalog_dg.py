@@ -2,7 +2,7 @@
 embed_product_catalog_dg.py
 ----------------------------
 Indexes the product catalog CSV into SAP AI Core Document Grounding
-using the Vector API directly (Option 2).
+using the VectorAPIClient from the SAP Generative AI Hub SDK.
 
 This is the Document Grounding equivalent of embed_product_catalog.py
 which used SAP HANA Cloud as the vector store.
@@ -15,10 +15,21 @@ Prerequisites:
     - data/product_catalog.csv (relative path: ../data/product_catalog.csv)
 """
 
+import csv
 import json
 import time
-import requests
-from langchain_community.document_loaders import CSVLoader
+
+from ai_core_sdk.ai_core_v2_client import AICoreV2Client
+from gen_ai_hub.proxy.gen_ai_hub_proxy import GenAIHubProxyClient
+from gen_ai_hub.document_grounding import (
+    VectorAPIClient,
+    CollectionCreateRequest,
+    EmbeddingConfig,
+    DocumentsCreateRequest,
+    BaseDocument,
+    TextOnlyBaseChunk,
+    VectorKeyValueListPair,
+)
 
 # ---- CONFIG ----
 COLLECTION_TITLE = "products-it-accessories"
@@ -26,126 +37,133 @@ CSV_PATH = "../data/product_catalog.csv"
 EMBEDDING_MODEL = "text-embedding-3-large"
 BATCH_SIZE = 10
 
+CONTENT_COLUMNS = [
+    "PRODUCT_NAME", "DESCRIPTION", "UNIT_PRICE", "LEAD_TIME_DAYS",
+    "STOCK_QUANTITY", "RATING", "MIN_ORDER", "CATEGORY", "SUPPLIER_NAME",
+    "SUPPLIER_COUNTRY", "SUPPLIER_CITY", "SUPPLIER_ADDRESS", "STATUS",
+    "CURRENCY", "MANUFACTURER", "CITY_LAT", "CITY_LONG",
+]
+METADATA_COLUMNS = [
+    "SUPPLIER_ID", "CATEGORY", "SUPPLIER_COUNTRY", "SUPPLIER_CITY", "MANUFACTURER",
+]
 
-# ---- AUTH ----
-def get_access_token(auth_url: str, client_id: str, client_secret: str) -> str:
-    """Retrieve an OAuth2 client credentials access token."""
-    response = requests.post(
-        f"{auth_url}/oauth/token",
-        data={
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-        },
-    )
-    response.raise_for_status()
-    return response.json()["access_token"]
+
+# ---- CSV LOADER ----
+class Document:
+    """Minimal document container (replaces LangChain Document)."""
+    def __init__(self, page_content: str, metadata: dict):
+        self.page_content = page_content
+        self.metadata = metadata
+
+
+def load_csv_documents(file_path: str) -> list:
+    """Load CSV rows as Document objects using the built-in csv module."""
+    docs = []
+    with open(file_path, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f, delimiter=";", quotechar='"')
+        for row in reader:
+            page_content = "\n".join(
+                f"{col}: {row[col]}" for col in CONTENT_COLUMNS if col in row
+            )
+            metadata = {col: row[col] for col in METADATA_COLUMNS if col in row}
+            metadata["source"] = row.get("PRODUCT_ID", "")
+            docs.append(Document(page_content=page_content, metadata=metadata))
+    return docs
 
 
 # ---- COLLECTION ----
-def create_collection(dg_base_url: str, aicore_base_url: str, headers: dict, title: str, embedding_model: str) -> str:
+def create_collection(vector_client: VectorAPIClient, title: str, embedding_model: str) -> str:
     """
     Create a Document Grounding collection (async).
-    Polls the Location URL until the collection is ready.
+
+    Uses a before/after snapshot of collection IDs to reliably identify the
+    newly created collection — avoids depending on the Location header or
+    JSON response body (the API returns 202 Accepted with an empty body).
+
+    Polls get_collection_creation_status() until the collection is CREATED.
     Returns the collection ID.
     """
-    response = requests.post(
-        f"{dg_base_url}/vector/collections",
-        headers=headers,
-        json={
-            "title": title,
-            "embeddingConfig": {"modelName": embedding_model},
-        },
-    )
-    response.raise_for_status()  # Expects 202 Accepted
+    # Snapshot existing collection IDs before creation
+    before_ids = {c.id for c in vector_client.get_collections().resources}
 
-    # Extract collection ID from Location header
-    # Format: .../vector/collections/{id}/creationStatus
-    location = response.headers.get("Location", "")
-    collection_id = location.split("/collections/")[-1].split("/")[0]
+    try:
+        vector_client.create_collection(
+            CollectionCreateRequest(
+                title=title,
+                embeddingConfig=EmbeddingConfig(modelName=embedding_model),
+            )
+        )
+    except Exception as e:
+        if "Expecting value" not in str(e):
+            raise  # only swallow the empty-body 202 JSON parse error
 
-    if not collection_id:
-        raise RuntimeError(f"Could not extract collection ID from Location header: {location}")
+    # Wait briefly then find the new collection (not in before_ids)
+    time.sleep(5)
+    after = vector_client.get_collections().resources
+    new_cols = [c for c in after if c.id not in before_ids and c.title == title]
+    if not new_cols:
+        raise RuntimeError(f"New collection '{title}' not found after creation")
 
+    collection_id = new_cols[0].id
     print(f"   Collection ID: {collection_id}")
     print(f"   Polling creation status...")
 
-    # Build full status URL.
-    # Location is relative to AICORE_BASE_URL (not dg_base_url), e.g.:
-    #   /lm/document-grounding/vector/collections/{id}/creationStatus
-    status_url = location if location.startswith("http") else f"{aicore_base_url}{location}"
-
+    # Poll until CREATED
     for attempt in range(30):
-        status_resp = requests.get(status_url, headers=headers)
-
-        # 204 No Content or empty body = ready
-        if status_resp.status_code == 204 or not status_resp.text.strip():
+        status_resp = vector_client.get_collection_creation_status(collection_id)
+        current_status = status_resp.status if hasattr(status_resp, "status") else "CREATED"
+        if current_status == "CREATED":
             print(f"   Collection ready (attempt {attempt + 1})")
             return collection_id
-
-        try:
-            status_data = status_resp.json()
-            current_status = status_data.get("status", "pending")
-            if current_status == "created":
-                print(f"   Collection ready (status=created, attempt {attempt + 1})")
-                return collection_id
-            print(f"   Attempt {attempt + 1}: status={current_status}, retrying...")
-        except Exception:
-            print(f"   Attempt {attempt + 1}: unexpected response ({status_resp.status_code}), retrying...")
-
+        print(f"   Attempt {attempt + 1}: status={current_status}, retrying...")
         time.sleep(2)
 
     raise TimeoutError("Collection creation timed out after 60 seconds")
 
 
-def delete_collection_if_exists(dg_base_url: str, headers: dict, title: str) -> None:
-    """Delete an existing collection with the given title (if found)."""
-    list_resp = requests.get(f"{dg_base_url}/vector/collections", headers=headers)
-    list_resp.raise_for_status()
-    collections = list_resp.json().get("resources", [])
-
-    for col in collections:
-        if col.get("title") == title:
-            col_id = col.get("id")
-            print(f"   Found existing collection '{title}' (ID: {col_id}), deleting...")
-            del_resp = requests.delete(
-                f"{dg_base_url}/vector/collections/{col_id}",
-                headers=headers,
-            )
-            del_resp.raise_for_status()
-            print(f"   Deletion initiated for collection ID: {col_id}")
-            time.sleep(3)  # Brief wait for deletion to propagate
-            return
-
-    print(f"   No existing collection named '{title}' found, skipping delete.")
-
-
 # ---- UPLOAD ----
-def upload_batch(dg_base_url: str, headers: dict, collection_id: str, docs: list) -> None:
-    """Upload a batch of LangChain documents to the Document Grounding collection."""
-    dg_documents = []
-    for doc in docs:
-        doc_metadata = [
-            {"key": k, "value": [str(v)]}
-            for k, v in doc.metadata.items()
-            if v is not None
-        ]
-        dg_documents.append({
-            "metadata": doc_metadata,
-            "chunks": [
-                {
-                    "content": doc.page_content,
-                    "metadata": [],
-                }
-            ],
-        })
-
-    response = requests.post(
-        f"{dg_base_url}/vector/collections/{collection_id}/documents",
-        headers=headers,
-        json={"documents": dg_documents},
+def upload_batch(vector_client: VectorAPIClient, collection_id: str, docs: list) -> None:
+    """Upload a batch of Document objects to the Document Grounding collection."""
+    vector_client.create_documents(
+        collection_id,
+        DocumentsCreateRequest(
+            documents=[
+                BaseDocument(
+                    metadata=[
+                        VectorKeyValueListPair(key=k, value=[str(v)])
+                        for k, v in doc.metadata.items()
+                        if v is not None
+                    ],
+                    chunks=[TextOnlyBaseChunk(content=doc.page_content, metadata=[])],
+                )
+                for doc in docs
+            ]
+        ),
     )
-    response.raise_for_status()
+
+
+def delete_existing_documents(vector_client: VectorAPIClient, collection_id: str) -> None:
+    """
+    Delete all documents in the collection before re-uploading.
+
+    Ensures a clean state on re-run without needing to recreate the collection.
+    The delete_document() API returns 204 No Content (empty body); the SDK
+    raises a JSONDecodeError when parsing the empty response — we swallow that
+    specific error since the deletion itself succeeded.
+    """
+    existing = vector_client.get_documents(collection_id, top=1)
+    if len(existing.resources) == 0:
+        return
+
+    print(f"   Deleting existing documents from collection (clean re-index)...")
+    all_docs = vector_client.get_documents(collection_id, top=1000)
+    for doc in all_docs.resources:
+        try:
+            vector_client.delete_document(collection_id, doc.id)
+        except Exception as e:
+            if "Expecting value" not in str(e):
+                raise  # only swallow the empty-body 204 parse error
+    print(f"   Deleted {len(all_docs.resources)} documents")
 
 
 # ---- MAIN ----
@@ -156,81 +174,43 @@ def main():
     with open("env_config.json") as f:
         aicore_config = json.load(f)
 
-    dg_base_url = f"{aicore_config['AICORE_BASE_URL']}/lm/document-grounding"
-
-    # Obtain access token
-    print("Authenticating with SAP AI Core...")
-    access_token = get_access_token(
-        aicore_config["AICORE_AUTH_URL"],
-        aicore_config["AICORE_CLIENT_ID"],
-        aicore_config["AICORE_CLIENT_SECRET"],
+    # Initialize AI Core + GenAI Hub clients
+    print("Initializing SAP AI Core client...")
+    ai_core_client = AICoreV2Client(
+        base_url=aicore_config["AICORE_BASE_URL"],
+        auth_url=aicore_config["AICORE_AUTH_URL"],
+        client_id=aicore_config["AICORE_CLIENT_ID"],
+        client_secret=aicore_config["AICORE_CLIENT_SECRET"],
+        resource_group=aicore_config["AICORE_RESOURCE_GROUP"],
     )
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "AI-Resource-Group": aicore_config["AICORE_RESOURCE_GROUP"],
-        "Content-Type": "application/json",
-    }
-
-    print(f"Document Grounding endpoint: {dg_base_url}")
+    proxy_client = GenAIHubProxyClient(ai_core_client=ai_core_client)
+    vector_client = VectorAPIClient(proxy_client=proxy_client)
+    print("✅ VectorAPIClient initialized")
 
     # Load CSV
     print(f"Loading CSV: {CSV_PATH}")
-    loader = CSVLoader(
-        file_path=CSV_PATH,
-        source_column="PRODUCT_ID",
-        metadata_columns=[
-            "SUPPLIER_ID",
-            "CATEGORY",
-            "SUPPLIER_COUNTRY",
-            "SUPPLIER_CITY",
-            "MANUFACTURER",
-        ],
-        content_columns=[
-            "PRODUCT_NAME",
-            "DESCRIPTION",
-            "UNIT_PRICE",
-            "LEAD_TIME_DAYS",
-            "STOCK_QUANTITY",
-            "RATING",
-            "MIN_ORDER",
-            "CATEGORY",
-            "SUPPLIER_NAME",
-            "SUPPLIER_COUNTRY",
-            "SUPPLIER_CITY",
-            "SUPPLIER_ADDRESS",
-            "STATUS",
-            "CURRENCY",
-            "MANUFACTURER",
-            "CITY_LAT",
-            "CITY_LONG",
-        ],
-        csv_args={"delimiter": ";", "quotechar": '"'},
-        encoding="utf-8-sig",
-    )
-    docs = loader.load()
+    docs = load_csv_documents(CSV_PATH)
     print(f"Loaded {len(docs)} documents")
-
-    # Delete existing collection (clean re-index)
-    # print(f"Checking for existing collection '{COLLECTION_TITLE}'...")
-    # delete_collection_if_exists(dg_base_url, headers, COLLECTION_TITLE)
 
     # Create new collection
     print(f"Creating collection '{COLLECTION_TITLE}'...")
-    collection_id = create_collection(dg_base_url, aicore_config["AICORE_BASE_URL"], headers, COLLECTION_TITLE, EMBEDDING_MODEL)
+    collection_id = create_collection(vector_client, COLLECTION_TITLE, EMBEDDING_MODEL)
     print(f"Collection created: {collection_id}")
+
+    # Delete any existing documents (clean re-index on re-run)
+    delete_existing_documents(vector_client, collection_id)
 
     # Upload documents in batches
     print(f"Uploading {len(docs)} documents in batches of {BATCH_SIZE}...")
     total_uploaded = 0
     for i in range(0, len(docs), BATCH_SIZE):
-        batch = docs[i: i + BATCH_SIZE]
-        upload_batch(dg_base_url, headers, collection_id, batch)
+        batch = docs[i : i + BATCH_SIZE]
+        upload_batch(vector_client, collection_id, batch)
         total_uploaded += len(batch)
         print(f"   Uploaded {total_uploaded}/{len(docs)} documents")
 
-    print(f"Collection '{COLLECTION_TITLE}' (ID: {collection_id}) is ready.")
-    print(f"Total execution time: {time.time() - start_time:.2f}s")
+    print(f"✅ Collection '{COLLECTION_TITLE}' (ID: {collection_id}) is ready.")
+    print(f"   Total execution time: {time.time() - start_time:.2f}s")
     print()
     print(f"Update DG_COLLECTION_ID in manifest.yml to: {collection_id}")
 

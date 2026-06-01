@@ -1,10 +1,15 @@
 """
 server_dg.py
 -------------
-Flask server using SAP AI Core Document Grounding (Vector API) for RAG.
+Flask server using SAP AI Core Document Grounding + Orchestration Service V2 for RAG.
 
 This is the Document Grounding equivalent of server.py which used
 SAP HANA Cloud as the vector store.
+
+The Orchestration Service handles retrieval and generation in a single call:
+  - GroundingModule performs semantic search against the Document Grounding collection
+  - LLM generates the answer using the retrieved context
+  - No manual vector search or prompt building required
 
 Environment variables:
     DG_COLLECTION_ID        Document Grounding collection ID (required).
@@ -13,7 +18,7 @@ Environment variables:
                             startup if DG_COLLECTION_ID is not set.
                             Default: "products-it-accessories"
     TOP_K                   Number of chunks to retrieve per query. Default: 15
-    CHAT_MODEL_NAME         LLM model name. Default: anthropic--claude-4.5-sonnet
+    CHAT_MODEL_NAME         LLM model name. Default: gpt-4o-mini
     MAX_TOKENS              LLM max tokens. Default: 800
     TEMPERATURE             LLM temperature. Default: 0.3
     AI_CORE_RESOURCE_GROUP  AI Core resource group. Default: default
@@ -25,19 +30,33 @@ import os
 import json
 import logging
 import functools
-import time
 from typing import Dict, Any
 
-import requests
 from flask import Flask, request, jsonify
 from cfenv import AppEnv
 from sap import xssec
 
-from gen_ai_hub.proxy.gen_ai_hub_proxy import GenAIHubProxyClient
 from ai_core_sdk.ai_core_v2_client import AICoreV2Client
-from gen_ai_hub.proxy.langchain.init_models import init_llm
+from gen_ai_hub.proxy.gen_ai_hub_proxy import GenAIHubProxyClient
+from gen_ai_hub.document_grounding import VectorAPIClient
 
-from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+from gen_ai_hub.orchestration_v2 import (
+    OrchestrationService,
+    OrchestrationConfig,
+    ModuleConfig,
+    LLMModelDetails,
+    PromptTemplatingModuleConfig,
+    Template,
+    SystemMessage,
+    UserMessage,
+    GroundingModuleConfig,
+    GroundingType,
+    DocumentGroundingConfig,
+    DocumentGroundingPlaceholders,
+    DocumentGroundingFilter,
+    DataRepositoryType,
+    GroundingSearchConfig,
+)
 
 # ==========================================================
 # Logging
@@ -71,7 +90,7 @@ if aicore_creds:
     logger.info(f"Using AI Core credentials from service: {AI_CORE_INSTANCE_NAME}")
     aicore_cfg = {
         "AICORE_BASE_URL": aicore_creds["serviceurls"]["AI_API_URL"] + "/v2",
-        "AICORE_AUTH_URL": aicore_creds["url"] + "/oauth/token",
+        "AICORE_AUTH_URL": aicore_creds["url"],
         "AICORE_CLIENT_ID": aicore_creds["clientid"],
         "AICORE_CLIENT_SECRET": aicore_creds["clientsecret"],
         "AICORE_RESOURCE_GROUP": AI_CORE_RESOURCE_GROUP,
@@ -99,48 +118,41 @@ ai_core_client = AICoreV2Client(
 )
 
 proxy_client = GenAIHubProxyClient(ai_core_client=ai_core_client)
+vector_client = VectorAPIClient(proxy_client=proxy_client)
+logger.info("AI Core client initialized successfully")
 
-CHAT_MODEL_NAME = os.getenv("CHAT_MODEL_NAME", "anthropic--claude-4.5-sonnet")
+# ==========================================================
+# Orchestration Service setup (V2)
+# ==========================================================
+CHAT_MODEL_NAME = os.getenv("CHAT_MODEL_NAME", "gpt-4o-mini")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", 800))
 TEMPERATURE = float(os.getenv("TEMPERATURE", 0.3))
 TOP_K = int(os.getenv("TOP_K", 15))
 
-llm = init_llm(
-    CHAT_MODEL_NAME,
-    proxy_client=proxy_client,
-    max_tokens=MAX_TOKENS,
-    temperature=TEMPERATURE,
-    top_p=None,
-)
-
-# ==========================================================
-# Document Grounding setup
-# ==========================================================
-DG_BASE_URL = f"{aicore_cfg['AICORE_BASE_URL']}/lm/document-grounding"
-DG_COLLECTION_TITLE = os.getenv("DG_COLLECTION_TITLE", "products-it-accessories")
-
-
-def _get_dg_access_token() -> str:
-    """Obtain a fresh OAuth2 token for Document Grounding API calls."""
-    response = requests.post(
-        f"{aicore_cfg['AICORE_AUTH_URL']}/oauth/token",
-        data={
-            "grant_type": "client_credentials",
-            "client_id": aicore_cfg["AICORE_CLIENT_ID"],
-            "client_secret": aicore_cfg["AICORE_CLIENT_SECRET"],
-        },
+# Discover the running Orchestration Service deployment
+try:
+    orchestration_deployment = next(
+        d for d in ai_core_client.deployment.query().resources
+        if "orchestration" in d.scenario_id.lower() and d.status.value == "RUNNING"
     )
-    response.raise_for_status()
-    return response.json()["access_token"]
+    orchestration_url = (
+        f"{aicore_cfg['AICORE_BASE_URL']}/inference/deployments/{orchestration_deployment.id}"
+    )
+    orchestration_service = OrchestrationService(
+        api_url=orchestration_url,
+        proxy_client=proxy_client,
+    )
+    logger.info(f"Orchestration Service (V2) initialized. Deployment ID: {orchestration_deployment.id}")
+except StopIteration:
+    raise RuntimeError(
+        "Orchestration Service deployment not found. "
+        "Ensure the Orchestration Service is enabled in your AI Core instance."
+    )
 
-
-def _dg_headers() -> dict:
-    """Build HTTP headers for Document Grounding API calls with a fresh token."""
-    return {
-        "Authorization": f"Bearer {_get_dg_access_token()}",
-        "AI-Resource-Group": aicore_cfg["AICORE_RESOURCE_GROUP"],
-        "Content-Type": "application/json",
-    }
+# ==========================================================
+# Document Grounding — resolve collection ID
+# ==========================================================
+DG_COLLECTION_TITLE = os.getenv("DG_COLLECTION_TITLE", "products-it-accessories")
 
 
 def _resolve_collection_id() -> str:
@@ -149,25 +161,19 @@ def _resolve_collection_id() -> str:
 
     Priority:
     1. DG_COLLECTION_ID environment variable (fastest — set after running embed script)
-    2. Auto-lookup by DG_COLLECTION_TITLE via GET /vector/collections
+    2. Auto-lookup by DG_COLLECTION_TITLE via VectorAPIClient.get_collections()
     """
-    # 1. Explicit env var
     col_id = os.getenv("DG_COLLECTION_ID", "").strip()
     if col_id:
         logger.info(f"Using DG_COLLECTION_ID from environment: {col_id}")
         return col_id
 
-    # 2. Auto-resolve by title
     logger.info(f"DG_COLLECTION_ID not set, resolving by title: '{DG_COLLECTION_TITLE}'")
-    resp = requests.get(f"{DG_BASE_URL}/vector/collections", headers=_dg_headers())
-    resp.raise_for_status()
-    collections = resp.json().get("resources", [])
-
-    for col in collections:
-        if col.get("title") == DG_COLLECTION_TITLE:
-            resolved_id = col["id"]
-            logger.info(f"Resolved collection '{DG_COLLECTION_TITLE}' -> ID: {resolved_id}")
-            return resolved_id
+    collections_resp = vector_client.get_collections()
+    for col in collections_resp.resources:
+        if col.title == DG_COLLECTION_TITLE:
+            logger.info(f"Resolved collection '{DG_COLLECTION_TITLE}' -> ID: {col.id}")
+            return col.id
 
     raise RuntimeError(
         f"Document Grounding collection '{DG_COLLECTION_TITLE}' not found.\n"
@@ -180,141 +186,80 @@ DG_COLLECTION_ID = _resolve_collection_id()
 logger.info(f"Document Grounding ready. Collection ID: {DG_COLLECTION_ID}")
 
 # ==========================================================
+# Build Orchestration RAG config (V2)
+# ==========================================================
+PRODUCT_SYSTEM_PROMPT = (
+    "You are a product recommendation assistant.\n\n"
+    "Your job is to help users find and understand products using ONLY the information "
+    "provided in the retrieved context.\n\n"
+    "Rules:\n"
+    "1. Base your answer only on the provided context. Never invent product names, "
+    "specifications, ratings, or prices.\n"
+    "2. If matching products exist: list product name and relevant attributes, explain "
+    "briefly why each product matches.\n"
+    "3. If no products match, respond exactly: "
+    "'I could not find any products that match your criteria.'\n"
+    "4. If the context does not contain enough information, respond exactly: "
+    "'I don't have enough information to answer that.'\n"
+    "5. Do not mention embeddings, vector search, retrieval, metadata, or internal processing.\n"
+    "6. Be clear, concise, and factual."
+)
+
+rag_config = OrchestrationConfig(
+    modules=ModuleConfig(
+        prompt_templating=PromptTemplatingModuleConfig(
+            prompt=Template(template=[
+                SystemMessage(content=PRODUCT_SYSTEM_PROMPT),
+                UserMessage(
+                    content=(
+                        "Context: {{?grounding_response}}\n\n"
+                        "User question: {{?question}}"
+                    )
+                ),
+            ]),
+            model=LLMModelDetails(
+                name=CHAT_MODEL_NAME,
+                params={"temperature": TEMPERATURE, "max_tokens": MAX_TOKENS},
+            ),
+        ),
+        grounding=GroundingModuleConfig(
+            type=GroundingType.DOCUMENT_GROUNDING_SERVICE,
+            config=DocumentGroundingConfig(
+                filters=[DocumentGroundingFilter(
+                    id="filter-1",
+                    data_repositories=[DG_COLLECTION_ID],
+                    search_config=GroundingSearchConfig(max_chunk_count=TOP_K),
+                    data_repository_type=DataRepositoryType.VECTOR,
+                )],
+                placeholders=DocumentGroundingPlaceholders(
+                    input=["question"],
+                    output="grounding_response",
+                ),
+            ),
+        ),
+    )
+)
+logger.info(f"RAG config ready. Model: {CHAT_MODEL_NAME}, TOP_K: {TOP_K}")
+
+# ==========================================================
 # Flask App
 # ==========================================================
 app = Flask(__name__)
 
 
 # ==========================================================
-# Helper — Semantic search via Document Grounding
-# ==========================================================
-def search_documents(query: str, top_k: int = TOP_K) -> list:
-    """
-    Perform semantic search using POST /vector/search.
-    Returns a list of chunk content strings.
-    """
-    response = requests.post(
-        f"{DG_BASE_URL}/vector/search",
-        headers=_dg_headers(),
-        json={
-            "query": query,
-            "filters": [
-                {
-                    "id": "filter-1",
-                    "collectionIds": [DG_COLLECTION_ID],
-                    "configuration": {"maxChunkCount": top_k},
-                }
-            ],
-        },
-    )
-    response.raise_for_status()
-    search_results = response.json()
-
-    # Extract chunk content from nested response structure:
-    # results -> VectorPerFilterSearchResult
-    #   -> results -> DocumentsChunk
-    #     -> documents -> Document-Output
-    #       -> chunks -> VectorChunk { id, content, metadata }
-    chunks = []
-    for filter_result in search_results.get("results", []):
-        for collection_result in filter_result.get("results", []):
-            for doc in collection_result.get("documents", []):
-                for chunk in doc.get("chunks", []):
-                    content = chunk.get("content", "")
-                    if content:
-                        chunks.append(content)
-    return chunks
-
-
-# ==========================================================
-# Helper — Generate RAG answer
+# Helper — Generate RAG answer via Orchestration Service V2
 # ==========================================================
 def generate_rag_response(query: str) -> str:
-    """Retrieve relevant chunks from Document Grounding and generate an LLM response."""
-
-    chunks = search_documents(query, top_k=TOP_K)
-    context = "\n\n".join(chunks)
-
-    PRODUCT_RAG_PROMPT = """
-    You are a product recommendation assistant.
-
-    Your job is to help users find and understand products using ONLY the information provided in the retrieved context.
-
-    You must follow these rules strictly:
-
-    --------------------------------------------------
-    1. Use only retrieved context
-    --------------------------------------------------
-    - Base your answer only on the provided context.
-    - Never invent product names, specifications, ratings, or prices.
-    - If required information is missing, say you don't know.
-
-    --------------------------------------------------
-    2. Understand user intent
-    --------------------------------------------------
-    The user may ask to:
-    - recommend products
-    - filter products by criteria (rating, price, category, brand, features)
-    - compare products
-    - explain product features
-    - summarize options
-    - find best match for a need
-
-    Interpret the request and use the context to respond appropriately.
-
-    --------------------------------------------------
-    3. When recommending products
-    --------------------------------------------------
-    If matching products exist:
-    - return only products that meet the criteria
-    - clearly list product name and relevant attributes
-    - explain briefly why each product matches
-
-    If no products match:
-    Respond exactly:
-    "I could not find any products that match your criteria."
-
-    --------------------------------------------------
-    4. When information is incomplete
-    --------------------------------------------------
-    If the context does not contain enough information:
-    Respond exactly:
-    "I don't have enough information to answer that."
-
-    --------------------------------------------------
-    5. Do not expose system details
-    --------------------------------------------------
-    Never mention:
-    - embeddings
-    - vector search
-    - retrieval
-    - metadata
-    - internal processing
-
-    --------------------------------------------------
-    6. Response style
-    --------------------------------------------------
-    - Be clear and concise
-    - Use structured lists when helpful
-    - Be factual and neutral
-    - Do not speculate
-
-    --------------------------------------------------
-
-    User question:
-    {query}
-
-    Context:
-    {context}
     """
-
-    human_message_prompt = HumanMessagePromptTemplate.from_template(PRODUCT_RAG_PROMPT)
-    chat_prompt = ChatPromptTemplate.from_messages([human_message_prompt])
-
-    prompt_text = chat_prompt.format_prompt(query=query, context=context).to_string()
-    llm_response = llm.invoke(prompt_text)
-
-    return llm_response.content.strip()
+    Use the Orchestration Service to retrieve relevant chunks from Document Grounding
+    and generate an LLM response in a single API call.
+    """
+    response = orchestration_service.run(
+        config=rag_config,
+        placeholder_values={"question": query},
+    )
+    return response.final_result.choices[0].message.content.strip()
 
 
 # ==========================================================

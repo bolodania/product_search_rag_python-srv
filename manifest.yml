@@ -9,7 +9,7 @@ applications:
 
     env:
       FLASK_ENV: production
-      CHAT_MODEL_NAME: anthropic--claude-4.5-sonnet
+      CHAT_MODEL_NAME: gpt-4o-mini
       EMBEDDING_MODEL_NAME: text-embedding-3-large
       TOP_K: 15
       MAX_TOKENS: 800
@@ -17,7 +17,7 @@ applications:
       AI_CORE_INSTANCE_NAME: default_aicore
       AI_CORE_RESOURCE_GROUP: default
       XSUAA_SERVICE_NAME: product_search_rag-python-srv-uaa
-      DG_COLLECTION_ID: a8da499e-b299-41f2-a594-bda9cf1c53c0
+      DG_COLLECTION_ID: ((YOUR_COLLECTION_ID))
       DG_COLLECTION_TITLE: products-it-accessories
       # HANA_UPS_NAME: ups_RMILLERYOUR_NUMBER  # not needed for Document Grounding
 

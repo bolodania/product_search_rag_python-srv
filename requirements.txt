@@ -2,7 +2,6 @@ Flask
 hdbcli
 langchain_hana
 sap-ai-sdk-gen[all]
-requests
 gunicorn
 cfenv
 sap-xssec

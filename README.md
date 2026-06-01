@@ -52,7 +52,7 @@ This service is available in **two versions**:
 |---|---|---|
 | `DG_COLLECTION_ID` | Document Grounding collection ID (set after running embed script) | — |
 | `DG_COLLECTION_TITLE` | Collection title for auto-resolution if ID not set | `products-it-accessories` |
-| `CHAT_MODEL_NAME` | LLM model name | `anthropic--claude-4.5-sonnet` |
+| `CHAT_MODEL_NAME` | LLM model name | `gpt-4o-mini` |
 | `EMBEDDING_MODEL_NAME` | Embedding model name | `text-embedding-3-large` |
 | `TOP_K` | Number of chunks to retrieve per query | `15` |
 | `MAX_TOKENS` | LLM max tokens | `800` |
