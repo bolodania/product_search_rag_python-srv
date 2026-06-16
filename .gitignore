@@ -172,3 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+#legacy
+server.py
+embed_product_catalog.py
+env_cloud.json

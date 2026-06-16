@@ -1,18 +1,6 @@
 # product_search_rag_YOUR_NUMBER-python-srv
 
-This is the Python-based service for the Product Search RAG application. It provides retrieval-augmented generation (RAG) capabilities using SAP Generative AI Hub models.
-
-This service is available in **two versions**:
-
-| | Document Grounding (default) | HANA Cloud (optional) |
-|---|---|---|
-| **Vector store** | SAP AI Core Document Grounding | SAP HANA Cloud |
-| **Server** | `server_dg.py` | `server.py` |
-| **Embed script** | `embed_product_catalog_dg.py` | `embed_product_catalog.py` |
-| **Active** | Yes (default) | Optional alternative |
-
-> The **Document Grounding version is used by default** (`Procfile` points to `server_dg.py`). The HANA Cloud version is a fully functional alternative — to use it instead, update `Procfile` to `web: python server.py`, restore the `HANA_UPS_NAME` env var and `ups_RMILLERYOUR_NUMBER` service binding in `manifest.yml`, and run `embed_product_catalog.py` to index the catalog into HANA.
-
+This is the Python-based service for the Product Search RAG application. It provides retrieval-augmented generation (RAG) capabilities using **SAP AI Core Document Grounding** and **SAP Generative AI Hub** models.
 
 ## Features
 
@@ -52,7 +40,7 @@ This service is available in **two versions**:
 |---|---|---|
 | `DG_COLLECTION_ID` | Document Grounding collection ID (set after running embed script) | — |
 | `DG_COLLECTION_TITLE` | Collection title for auto-resolution if ID not set | `products-it-accessories` |
-| `CHAT_MODEL_NAME` | LLM model name | `gpt-4o-mini` |
+| `CHAT_MODEL_NAME` | LLM model name | `gpt-4.1-mini` |
 | `EMBEDDING_MODEL_NAME` | Embedding model name | `text-embedding-3-large` |
 | `TOP_K` | Number of chunks to retrieve per query | `15` |
 | `MAX_TOKENS` | LLM max tokens | `800` |
@@ -144,29 +132,21 @@ On error:
 
 ## Key Files
 
-### Document Grounding (default)
 - `server_dg.py`: Main Flask application using SAP AI Core Document Grounding for RAG.
 - `embed_product_catalog_dg.py`: Script to index the product catalog CSV into a Document Grounding collection. Run manually after updating the catalog.
-
-### HANA Cloud (optional alternative)
-- `server.py`: Flask application using SAP HANA Cloud vector search for RAG.
-- `embed_product_catalog.py`: Script to embed the product catalog into HANA. Requires a HANA Cloud instance and UPS binding.
-
-### Shared
 - `deploy.sh`: Automated deployment script for Cloud Foundry.
 - `manifest.yml`: Cloud Foundry manifest specifying app name, environment variables, and service bindings.
-- `Procfile`: Command to run the Flask app (`server_dg.py` by default).
+- `Procfile`: Command to run the Flask app (`web: python server_dg.py`).
 - `requirements.txt`: Python dependencies for the project.
 - `runtime.txt`: Python runtime version for deployment.
-- `env_config.json`: (Local only) AI Core configuration.
-- `env_cloud.json`: (Local only) HANA Cloud credentials (only needed for HANA version).
+- `env_config.json`: (Local only) AI Core configuration. Never commit to version control.
 - `xs-security.json`: Security configuration for XSUAA.
 
 
 ## Security
 
 - Authentication is enforced via SAP XSUAA in Cloud Foundry deployments. Local testing does not require authentication.
-- Sensitive credentials should be stored securely in `env_cloud.json` and `env_config.json` (local only). Never commit these files to version control.
+- Sensitive credentials should be stored securely in `env_config.json` (local only). Never commit these files to version control.
 
 ## License
 

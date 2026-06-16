@@ -9,7 +9,7 @@ applications:
 
     env:
       FLASK_ENV: production
-      CHAT_MODEL_NAME: gpt-4o-mini
+      CHAT_MODEL_NAME: gpt-4.1-mini
       EMBEDDING_MODEL_NAME: text-embedding-3-large
       TOP_K: 15
       MAX_TOKENS: 800
@@ -19,9 +19,7 @@ applications:
       XSUAA_SERVICE_NAME: product_search_rag-python-srv-uaa
       DG_COLLECTION_ID: ((YOUR_COLLECTION_ID))
       DG_COLLECTION_TITLE: products-it-accessories
-      # HANA_UPS_NAME: ups_RMILLERYOUR_NUMBER  # not needed for Document Grounding
 
     services:
       - product_search_rag-python-srv-uaa
       - default_aicore
-      # - ups_RMILLERYOUR_NUMBER  # not needed for Document Grounding
