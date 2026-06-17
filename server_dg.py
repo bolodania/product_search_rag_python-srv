@@ -3,9 +3,6 @@ server_dg.py
 -------------
 Flask server using SAP AI Core Document Grounding + Orchestration Service V2 for RAG.
 
-This is the Document Grounding equivalent of server.py which used
-SAP HANA Cloud as the vector store.
-
 The Orchestration Service handles retrieval and generation in a single call:
   - GroundingModule performs semantic search against the Document Grounding collection
   - LLM generates the answer using the retrieved context

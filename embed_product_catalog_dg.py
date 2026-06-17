@@ -4,9 +4,6 @@ embed_product_catalog_dg.py
 Indexes the product catalog CSV into SAP AI Core Document Grounding
 using the VectorAPIClient from the SAP Generative AI Hub SDK.
 
-This is the Document Grounding equivalent of embed_product_catalog.py
-which used SAP HANA Cloud as the vector store.
-
 Usage:
     python embed_product_catalog_dg.py
 

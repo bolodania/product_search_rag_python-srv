@@ -3,7 +3,7 @@
   "info": {
     "title": "Product Search RAG API",
     "version": "1.0.0",
-    "description": "API for product recommendation and retrieval using RAG with SAP HANA and GenAI Hub."
+    "description": "API for product recommendation and retrieval using RAG with SAP AI Core Document Grounding and GenAI Hub."
   },
   "servers": [
     {
@@ -14,7 +14,7 @@
     "/retrieveData": {
       "post": {
         "summary": "Retrieve product recommendations or information",
-        "description": "Accepts a user query and returns product recommendations or information based on retrieved context from SAP HANA vector database.",
+        "description": "Accepts a user query and returns product recommendations or information based on retrieved context from SAP AI Core Document Grounding.",
         "operationId": "retrieveData",
         "requestBody": {
           "required": true,
