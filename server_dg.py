@@ -87,7 +87,7 @@ if aicore_creds:
     logger.info(f"Using AI Core credentials from service: {AI_CORE_INSTANCE_NAME}")
     aicore_cfg = {
         "AICORE_BASE_URL": aicore_creds["serviceurls"]["AI_API_URL"] + "/v2",
-        "AICORE_AUTH_URL": aicore_creds["url"],
+        "AICORE_AUTH_URL": aicore_creds["url"] + "/oauth/token",
         "AICORE_CLIENT_ID": aicore_creds["clientid"],
         "AICORE_CLIENT_SECRET": aicore_creds["clientsecret"],
         "AICORE_RESOURCE_GROUP": AI_CORE_RESOURCE_GROUP,
